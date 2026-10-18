@@ -2153,6 +2153,9 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
   Widget _buildPlayer({required bool fullscreen}) {
     final media = MediaQuery.of(context);
     final tvMode = media.size.width >= 850 && media.size.width > media.size.height;
+    // Use a slightly more compact channel information bar on mobile-sized
+    // landscape layouts and smaller tablets.
+    final compactChannelInfo = media.size.width < 1100;
     final player = _player;
     final initialized = player?.value.isInitialized == true;
     return GestureDetector(
@@ -2264,6 +2267,15 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                           style: const TextStyle(fontSize: 12),
                         ),
                       ),
+                      if (!tvMode && !kIsWeb && Platform.isAndroid)
+                        IconButton(
+                          tooltip: 'Picture-in-Picture',
+                          visualDensity: VisualDensity.compact,
+                          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                          padding: EdgeInsets.zero,
+                          onPressed: _enterPictureInPicture,
+                          icon: const Icon(Icons.picture_in_picture_alt, size: 20),
+                        ),
                       if (!tvMode)
                         IconButton(
                           tooltip: 'Fullscreen',
@@ -2357,12 +2369,12 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                     child: _glass(
                       radius: 14,
                       color: const Color(0xB5101020),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: EdgeInsets.symmetric(horizontal: compactChannelInfo ? 12 : 16, vertical: compactChannelInfo ? 8 : 10),
                       child: Row(
                         children: [
                           Container(
-                            width: 76,
-                            height: 76,
+                            width: compactChannelInfo ? 62 : 76,
+                            height: compactChannelInfo ? 62 : 76,
                             decoration: BoxDecoration(
                               color: accentColor.withOpacity(0.18),
                               borderRadius: BorderRadius.circular(10),
@@ -2372,27 +2384,27 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                                 ? ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: _logoForChannel(_selectedChannel!), fit: BoxFit.contain, placeholder: (_, __) => const Icon(Icons.live_tv, color: accentColor), errorWidget: (_, __, ___) => const Icon(Icons.live_tv, color: accentColor)))
                                 : const Icon(Icons.live_tv, color: accentColor, size: 30),
                           ),
-                          const SizedBox(width: 12),
+                          SizedBox(width: compactChannelInfo ? 8 : 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text(_selectedChannel!.name.trim(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                                Text(_selectedChannel!.name.trim(), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 14 : 16, fontWeight: FontWeight.w700)),
                                 const SizedBox(height: 3),
-                                Text('NOW · ${_epgForChannel(_selectedChannel!)?.title ?? 'Programme info unavailable'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Color(0xFFD2C8FF), fontWeight: FontWeight.w600)),
+                                Text('NOW · ${_epgForChannel(_selectedChannel!)?.title ?? 'Programme info unavailable'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 11 : 12, color: const Color(0xFFD2C8FF), fontWeight: FontWeight.w600)),
                                 const SizedBox(height: 4),
                                 ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: _epgProgress(_epgForChannel(_selectedChannel!)), minHeight: 4, backgroundColor: Colors.white12, valueColor: const AlwaysStoppedAnimation<Color>(accentColor))),
                                 const SizedBox(height: 3),
-                                Builder(builder: (context) { final schedule = _epgScheduleForChannel(_selectedChannel!); final now = DateTime.now().toUtc(); EpgProgram? next; for (final item in schedule) { if (item.start.isAfter(now)) { next = item; break; } } return Text('NEXT · ${next?.title ?? 'Not available'}${next == null ? '' : ' · ${_formatEpgTime(next.start)}'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Colors.white70)); }),
+                                Builder(builder: (context) { final schedule = _epgScheduleForChannel(_selectedChannel!); final now = DateTime.now().toUtc(); EpgProgram? next; for (final item in schedule) { if (item.start.isAfter(now)) { next = item; break; } } return Text('NEXT · ${next?.title ?? 'Not available'}${next == null ? '' : ' · ${_formatEpgTime(next.start)}'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 9 : 10, color: Colors.white70)); }),
                                 const SizedBox(height: 3),
-                                Text(_selectedChannel!.group, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Colors.white60)),
+                                Text(_selectedChannel!.group, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 9 : 10, color: Colors.white60)),
                               ],
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          SizedBox(width: compactChannelInfo ? 8 : 12),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            padding: EdgeInsets.symmetric(horizontal: compactChannelInfo ? 7 : 10, vertical: compactChannelInfo ? 4 : 5),
                             decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.18), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.redAccent.withOpacity(0.55))),
                             child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.circle, color: Colors.redAccent, size: 7), SizedBox(width: 6), Text('LIVE', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.1))]),
                           ),
@@ -2505,6 +2517,34 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
         ),
       ),
     );
+  }
+
+  Future<void> _enterPictureInPicture() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    if (_player == null || !_player!.value.isInitialized || !_player!.value.isPlaying) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Start playing a channel before using Picture-in-Picture.')),
+        );
+      }
+      return;
+    }
+    try {
+      await _pipChannel.invokeMethod<bool>('enterPictureInPicture');
+    } on PlatformException catch (e) {
+      debugPrint('Could not enter Picture-in-Picture: ${e.message}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Picture-in-Picture is not available on this device.')),
+        );
+      }
+    } on MissingPluginException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Picture-in-Picture is not available in this build.')),
+        );
+      }
+    }
   }
 
   // Keep the live player/controller alive when Android backgrounds the app.
