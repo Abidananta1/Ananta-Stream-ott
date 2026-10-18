@@ -12,3 +12,6 @@ This project still uses Flutter `video_player` and Android's native playback sta
 The source has not been compiled or tested on a physical TV box in this package.
 Audio compatibility update
 Playback is implemented with media_kit/libmpv rather than Flutter video_player. The bundled native playback libraries provide broader codec support, intended to address MPEG Audio Layer 1/2 (MPGA/MP2) streams. This source has not been compiled or device-tested in this environment; verify the GitHub Actions build and test on the target Android TV device.
+
+Android mobile Picture-in-Picture
+On supported Android 8.0+ devices, start a channel and tap the Picture-in-Picture icon in the player controls to keep playback in a floating window. Pressing Home while playing can also enter PiP automatically. Availability may depend on device settings and Android version.
