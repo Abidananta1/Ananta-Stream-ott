@@ -377,11 +377,15 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
   final ScrollController _tvEpgScrollController = ScrollController();
   int _playlistRequestId = 0;
   int _playRequestId = 0;
+  // Picture-in-Picture state (Android 8+). While true, only the video is drawn.
+  bool _inPip = false;
+  bool _pausedForBackground = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _pipChannel.setMethodCallHandler(_onPipCall);
     // Check the hosted version manifest after the first frame so update prompts
     // can safely use this page's BuildContext.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1962,6 +1966,7 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
         try { await oldPlayer.dispose(); } catch (_) {}
       }
       await WakelockPlus.enable();
+      _syncPipAutoEnter();
       _scheduleControlsHide();
     } on TimeoutException {
       try { await controller.dispose(); } catch (_) {}
@@ -2011,6 +2016,7 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
       }
       if (!mounted) return;
       setState(() {});
+      _syncPipAutoEnter();
       _showPlayerControls();
     } catch (e) {
       debugPrint('Playback control error: $e');
@@ -2153,9 +2159,6 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
   Widget _buildPlayer({required bool fullscreen}) {
     final media = MediaQuery.of(context);
     final tvMode = media.size.width >= 850 && media.size.width > media.size.height;
-    // Use a slightly more compact channel information bar on mobile-sized
-    // landscape layouts and smaller tablets.
-    final compactChannelInfo = media.size.width < 1100;
     final player = _player;
     final initialized = player?.value.isInitialized == true;
     return GestureDetector(
@@ -2239,7 +2242,7 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                 ),
               ),
             // All controls disappear together after 2 seconds.
-            if (_controlsVisible) ...[
+            if (_controlsVisible && !_inPip) ...[
               if (!tvMode)
                 Positioned(
                 bottom: 8,
@@ -2267,15 +2270,6 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                           style: const TextStyle(fontSize: 12),
                         ),
                       ),
-                      if (!tvMode && !kIsWeb && Platform.isAndroid)
-                        IconButton(
-                          tooltip: 'Picture-in-Picture',
-                          visualDensity: VisualDensity.compact,
-                          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                          padding: EdgeInsets.zero,
-                          onPressed: _enterPictureInPicture,
-                          icon: const Icon(Icons.picture_in_picture_alt, size: 20),
-                        ),
                       if (!tvMode)
                         IconButton(
                           tooltip: 'Fullscreen',
@@ -2369,12 +2363,12 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                     child: _glass(
                       radius: 14,
                       color: const Color(0xB5101020),
-                      padding: EdgeInsets.symmetric(horizontal: compactChannelInfo ? 12 : 16, vertical: compactChannelInfo ? 8 : 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       child: Row(
                         children: [
                           Container(
-                            width: compactChannelInfo ? 62 : 76,
-                            height: compactChannelInfo ? 62 : 76,
+                            width: 76,
+                            height: 76,
                             decoration: BoxDecoration(
                               color: accentColor.withOpacity(0.18),
                               borderRadius: BorderRadius.circular(10),
@@ -2384,27 +2378,27 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                                 ? ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: _logoForChannel(_selectedChannel!), fit: BoxFit.contain, placeholder: (_, __) => const Icon(Icons.live_tv, color: accentColor), errorWidget: (_, __, ___) => const Icon(Icons.live_tv, color: accentColor)))
                                 : const Icon(Icons.live_tv, color: accentColor, size: 30),
                           ),
-                          SizedBox(width: compactChannelInfo ? 8 : 12),
+                          const SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text(_selectedChannel!.name.trim(), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 14 : 16, fontWeight: FontWeight.w700)),
+                                Text(_selectedChannel!.name.trim(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                                 const SizedBox(height: 3),
-                                Text('NOW · ${_epgForChannel(_selectedChannel!)?.title ?? 'Programme info unavailable'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 11 : 12, color: const Color(0xFFD2C8FF), fontWeight: FontWeight.w600)),
+                                Text('NOW · ${_epgForChannel(_selectedChannel!)?.title ?? 'Programme info unavailable'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Color(0xFFD2C8FF), fontWeight: FontWeight.w600)),
                                 const SizedBox(height: 4),
                                 ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: _epgProgress(_epgForChannel(_selectedChannel!)), minHeight: 4, backgroundColor: Colors.white12, valueColor: const AlwaysStoppedAnimation<Color>(accentColor))),
                                 const SizedBox(height: 3),
-                                Builder(builder: (context) { final schedule = _epgScheduleForChannel(_selectedChannel!); final now = DateTime.now().toUtc(); EpgProgram? next; for (final item in schedule) { if (item.start.isAfter(now)) { next = item; break; } } return Text('NEXT · ${next?.title ?? 'Not available'}${next == null ? '' : ' · ${_formatEpgTime(next.start)}'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 9 : 10, color: Colors.white70)); }),
+                                Builder(builder: (context) { final schedule = _epgScheduleForChannel(_selectedChannel!); final now = DateTime.now().toUtc(); EpgProgram? next; for (final item in schedule) { if (item.start.isAfter(now)) { next = item; break; } } return Text('NEXT · ${next?.title ?? 'Not available'}${next == null ? '' : ' · ${_formatEpgTime(next.start)}'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Colors.white70)); }),
                                 const SizedBox(height: 3),
-                                Text(_selectedChannel!.group, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: compactChannelInfo ? 9 : 10, color: Colors.white60)),
+                                Text(_selectedChannel!.group, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Colors.white60)),
                               ],
                             ),
                           ),
-                          SizedBox(width: compactChannelInfo ? 8 : 12),
+                          const SizedBox(width: 12),
                           Container(
-                            padding: EdgeInsets.symmetric(horizontal: compactChannelInfo ? 7 : 10, vertical: compactChannelInfo ? 4 : 5),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                             decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.18), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.redAccent.withOpacity(0.55))),
                             child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.circle, color: Colors.redAccent, size: 7), SizedBox(width: 6), Text('LIVE', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.1))]),
                           ),
@@ -2519,44 +2513,61 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
     );
   }
 
-  Future<void> _enterPictureInPicture() async {
-    if (kIsWeb || !Platform.isAndroid) return;
-    if (_player == null || !_player!.value.isInitialized || !_player!.value.isPlaying) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Start playing a channel before using Picture-in-Picture.')),
-        );
-      }
-      return;
+  // --------------------------------------------------
+  // PICTURE-IN-PICTURE
+  // --------------------------------------------------
+  // Native side (MainActivity) reports PiP mode changes through the channel.
+  Future<dynamic> _onPipCall(MethodCall call) async {
+    if (call.method == 'pipChanged') {
+      final active = call.arguments == true;
+      if (!mounted || active == _inPip) return null;
+      setState(() {
+        _inPip = active;
+        if (active) {
+          _controlsVisible = false;
+          _channelInfoVisible = false;
+          _tvSidebarVisible = false;
+          _tvEpgVisible = false;
+        }
+      });
+      if (!active) _focusTvPlayer();
     }
+    return null;
+  }
+
+  // Tell Android whether Home/Recents should auto-enter PiP (only while a
+  // stream is actually playing).
+  Future<void> _syncPipAutoEnter() async {
+    final player = _player;
+    final enabled = player != null && player.value.isInitialized && player.value.isPlaying;
     try {
-      await _pipChannel.invokeMethod<bool>('enterPictureInPicture');
-    } on PlatformException catch (e) {
-      debugPrint('Could not enter Picture-in-Picture: ${e.message}');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Picture-in-Picture is not available on this device.')),
-        );
-      }
-    } on MissingPluginException {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Picture-in-Picture is not available in this build.')),
-        );
-      }
+      await _pipChannel.invokeMethod('setPipAutoEnter', {
+        'enabled': enabled,
+        'aspect': player?.value.aspectRatio ?? 16 / 9,
+      });
+    } catch (e) {
+      debugPrint('PiP sync error: $e');
     }
   }
 
-  // Keep the live player/controller alive when Android backgrounds the app.
-  // Android's native Activity automatically enters Picture-in-Picture on Home;
-  // Flutter is deliberately not disposing or reinitializing the stream here, so
-  // returning from PiP resumes the exact same channel and UI state.
+  // Keep the live player/controller alive while Android shows the PiP window.
+  // If the app is fully hidden (PiP window dismissed, or Home without PiP),
+  // pause so audio does not keep playing invisibly; resume on return.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && mounted) {
-      // Restore the normal UI after leaving PiP without changing channel,
-      // playlist position, fullscreen state, or playback controller.
+    final player = _player;
+    if ((state == AppLifecycleState.hidden || state == AppLifecycleState.paused) && !_inPip) {
+      if (player != null && player.value.isInitialized && player.value.isPlaying) {
+        _pausedForBackground = true;
+        unawaited(player.pause().catchError((Object e) { debugPrint('Background pause error: $e'); }));
+      }
+    } else if (state == AppLifecycleState.resumed && mounted) {
+      if (_pausedForBackground && player != null) {
+        _pausedForBackground = false;
+        unawaited(player.play().catchError((Object e) { debugPrint('Resume error: $e'); }));
+      }
       setState(() {});
+      _syncPipAutoEnter();
     }
   }
 
@@ -2565,6 +2576,8 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
   // --------------------------------------------------
   @override
   void dispose() {
+    _pipChannel.setMethodCallHandler(null);
+    unawaited(_pipChannel.invokeMethod('setPipAutoEnter', {'enabled': false}).catchError((Object e) { debugPrint('PiP cleanup error: $e'); }));
     _controlsTimer?.cancel();
     _channelInfoTimer?.cancel();
     _epgClock?.cancel();
@@ -2603,14 +2616,14 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
   Widget build(BuildContext context) {
     final channels = _visibleChannels;
     final media = MediaQuery.of(context);
-    final useTvLayout = !_fullscreen && media.size.width >= 850 && media.size.width > media.size.height;
+    final useTvLayout = !_inPip && !_fullscreen && media.size.width >= 850 && media.size.width > media.size.height;
     return Focus(
       autofocus: true,
       onKeyEvent: _handleRemoteKey,
       child: WillPopScope(
       onWillPop: _handleBack,
       child: Scaffold(
-        appBar: (_fullscreen || useTvLayout)
+        appBar: (_fullscreen || _inPip || useTvLayout)
             ? null
             : AppBar(
                 backgroundColor: backgroundColor,
@@ -2662,7 +2675,7 @@ class _AnantaHomePageState extends State<AnantaHomePage> with WidgetsBindingObse
                   ),
                 ],
               ),
-        body: _fullscreen
+        body: (_fullscreen || _inPip)
             ? _buildPlayer(fullscreen: true)
             : useTvLayout
                 ? _buildTvLayout(channels)
