@@ -46,6 +46,8 @@ jobs:
           activity.write_text(r'''package com.ananta.ott
 
           import android.app.PictureInPictureParams
+          import android.content.pm.PackageManager
+          import android.content.res.Configuration
           import android.os.Build
           import android.util.Rational
           import io.flutter.embedding.android.FlutterActivity
@@ -54,45 +56,80 @@ jobs:
 
           class MainActivity : FlutterActivity() {
               private val channelName = "com.ananta.ott/pip"
+              private var channel: MethodChannel? = null
+              // True only while a stream is playing; gates Home/Recents auto-PiP.
+              private var pipEnabled = false
+              private var aspect = 16.0 / 9.0
 
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
-                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
-                      .setMethodCallHandler { call, result ->
+                  channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).also { ch ->
+                      ch.setMethodCallHandler { call, result ->
                           when (call.method) {
+                              "isPipSupported" -> result.success(isPipSupported())
+                              "isPictureInPicture" -> result.success(isPipActive())
                               "enterPictureInPicture" -> {
-                                  enterPip()
-                                  result.success(true)
+                                  call.argument<Double>("aspect")?.let { aspect = it }
+                                  result.success(enterPip())
                               }
-                              "isPictureInPicture" -> {
-                                  result.success(isInPictureInPictureMode)
+                              "setPipAutoEnter" -> {
+                                  pipEnabled = call.argument<Boolean>("enabled") ?: false
+                                  call.argument<Double>("aspect")?.let { aspect = it }
+                                  updateAutoEnter()
+                                  result.success(true)
                               }
                               else -> result.notImplemented()
                           }
                       }
+                  }
               }
 
               override fun onUserLeaveHint() {
                   super.onUserLeaveHint()
-                  // Android Home/background action: keep the live stream visible
-                  // in PiP instead of destroying/recreating the Flutter page.
-                  enterPip()
+                  // Home / app switch while a stream is playing: keep it visible in PiP.
+                  if (pipEnabled && !isPipActive()) enterPip()
               }
 
-              private fun enterPip() {
-                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isFinishing) return
+              override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+                  super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+                  channel?.invokeMethod("pipChanged", isInPictureInPictureMode)
+              }
+
+              private fun isPipSupported(): Boolean =
+                  Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                      packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+              private fun isPipActive(): Boolean =
+                  Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode
+
+              private fun buildParams(): PictureInPictureParams {
+                  // Android only accepts aspect ratios between 1:2.39 and 2.39:1.
+                  val ratio = aspect.coerceIn(0.5, 2.39)
                   val builder = PictureInPictureParams.Builder()
+                      .setAspectRatio(Rational((ratio * 1000).toInt(), 1000))
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                      builder.setAutoEnterEnabled(true)
-                      // setSeamlessSourceRectHint() is not an Android API.
-                      // Keep the standard PiP source rect API for Android 12+.
-                      builder.setSourceRectHint(
-                          android.graphics.Rect(0, 0, resources.displayMetrics.widthPixels,
-                              (resources.displayMetrics.widthPixels * 9L / 16L).toInt())
-                      )
+                      builder.setAutoEnterEnabled(pipEnabled)
                   }
-                  builder.setAspectRatio(Rational(16, 9))
-                  enterPictureInPictureMode(builder.build())
+                  return builder.build()
+              }
+
+              // Android 12+: system auto-enters PiP on Home gesture when enabled.
+              private fun updateAutoEnter() {
+                  if (!isPipSupported() || isFinishing) return
+                  try {
+                      setPictureInPictureParams(buildParams())
+                  } catch (e: Exception) {
+                      // Ignore: params are best-effort.
+                  }
+              }
+
+              private fun enterPip(): Boolean {
+                  if (!isPipSupported() || isFinishing) return false
+                  return try {
+                      enterPictureInPictureMode(buildParams())
+                  } catch (e: Exception) {
+                      false
+                  }
               }
           }
           ''')
@@ -221,8 +258,6 @@ jobs:
 
           gh release create "$TAG"             build_app/build/app/outputs/flutter-apk/app-release.apk             --repo "$GITHUB_REPOSITORY"             --title "Ananta OTT v1.0.8"             --notes "## Ananta OTT v1.0.8
 
-          - Added a dedicated Picture-in-Picture button for Android mobile playback
-          - Home/background action continues to support automatic Picture-in-Picture
-          - Preserves the same channel/player/UI state when returning from PiP
-          - Fixed GitHub Release publishing for immutable releases
+          - Picture-in-Picture when minimizing the app while a stream is playing
+          - Video-only PiP window; playback pauses if the PiP window is closed
           - APK automatically attached to this GitHub Release"             --latest
